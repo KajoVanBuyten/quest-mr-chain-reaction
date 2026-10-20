@@ -1,0 +1,116 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="theme-color" content="#07090f" />
+    <meta name="description" content="Chain Reaction – a mixed-reality physics sandbox for Meta Quest 3. Build Rube-Goldberg machines across your real furniture." />
+    <title>Chain Reaction · Mixed-Reality Physics Sandbox</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+  </head>
+  <body>
+    <div id="app" aria-hidden="true"></div>
+
+    <section id="landing" class="landing">
+      <div class="landing-inner">
+        <header class="hero">
+          <p class="eyebrow">Mixed Reality · Meta Quest 3 · WebXR</p>
+          <h1>Chain <span>Reaction</span></h1>
+          <p class="lead">
+            Build Rube-Goldberg machines across your real furniture. Dominoes, marble ramps, bowling pins, bumpers,
+            seesaws and explosive barrels — your room scan becomes the physics world. Place the glowing trigger ball,
+            hit start, and watch it all go down in bullet time.
+          </p>
+          <div class="cta">
+            <button id="btn-ar" class="btn btn-primary" type="button" disabled>
+              <span class="btn-title">Enter AR</span>
+              <span class="btn-sub" id="ar-sub">Checking WebXR support…</span>
+            </button>
+            <button id="btn-vr" class="btn btn-secondary hidden" type="button">
+              <span class="btn-title">Enter VR</span>
+              <span class="btn-sub">Virtual room fallback</span>
+            </button>
+            <button id="btn-desktop" class="btn btn-ghost" type="button" disabled>
+              <span class="btn-title">Preview in browser</span>
+              <span class="btn-sub">Mouse &amp; keyboard sandbox</span>
+            </button>
+          </div>
+          <p id="status" class="status">Loading physics engine…</p>
+          <p id="https-hint" class="hint hidden">
+            WebXR needs a secure context. Open this page via <strong>https://</strong> (or localhost) — on GitHub Pages
+            this is automatic.
+          </p>
+        </header>
+
+        <div class="grid">
+          <article class="card">
+            <h2>Features</h2>
+            <ul class="features">
+              <li><b>Your room is the level</b> — detected planes &amp; room mesh become Rapier colliders.</li>
+              <li><b>Hit-test placement</b> with a glowing ghost preview snapped to real surfaces.</li>
+              <li><b>Domino line tool</b> — drag along the table to lay a curved row.</li>
+              <li><b>Grab &amp; throw</b> anything with hands or controllers.</li>
+              <li><b>Bullet time</b>, replay of the last run, combo counter &amp; perfect-run confetti.</li>
+              <li><b>Explosive barrels</b> with shockwave, light flash and sparks.</li>
+              <li><b>Procedural spatial audio</b> — HRTF clicks, rolling marbles, booms. No sound files.</li>
+              <li><b>Four preset levels</b> auto-placed on your largest table or the floor.</li>
+            </ul>
+          </article>
+
+          <article class="card">
+            <h2>Controls</h2>
+            <div class="controls">
+              <h3>Controllers</h3>
+              <dl>
+                <dt>Right trigger</dt><dd>Place piece / hold to draw domino line / press menu tile</dd>
+                <dt>Squeeze</dt><dd>Grab &amp; throw (near or by ray)</dd>
+                <dt>Right stick ←→ / ↑↓</dt><dd>Rotate ghost / switch tool</dd>
+                <dt>A / B</dt><dd>Start / Reset</dd>
+                <dt>X / Y</dt><dd>Bullet time / Replay</dd>
+                <dt>Left trigger · R-stick click</dt><dd>Next tool · Next level</dd>
+              </dl>
+              <h3>Hands</h3>
+              <dl>
+                <dt>Look at left palm</dt><dd>Tool palette appears — poke a tile</dd>
+                <dt>Right pinch</dt><dd>Aim, twist wrist to rotate, release to place</dd>
+                <dt>Pinch near a piece</dt><dd>Grab, move, throw</dd>
+              </dl>
+              <h3>Browser preview</h3>
+              <dl>
+                <dt>Left click</dt><dd>Place · drag a piece to throw it (Shift for static parts)</dd>
+                <dt>Right drag · wheel</dt><dd>Orbit · zoom</dd>
+                <dt>1–0 · Q/E</dt><dd>Tools · rotate</dd>
+                <dt>Space R T P L</dt><dd>Start, Reset, Bullet time, Replay, Level</dd>
+              </dl>
+            </div>
+          </article>
+        </div>
+
+        <footer class="foot">
+          <span>Best on Meta Quest 3 in the Meta Quest Browser · room setup recommended</span>
+          <span class="url">kajovanbuyten.github.io/quest-mr-chain-reaction</span>
+        </footer>
+      </div>
+    </section>
+
+    <div id="hud" class="hud">
+      <div class="hud-top">
+        <button id="hud-back" class="hud-back" type="button" title="Back to start screen">&#8592;</button>
+        <div class="hud-brand">Chain <span>Reaction</span></div>
+        <div id="hud-status" class="hud-status"></div>
+        <div class="hud-stats">
+          <div><small>score</small><b id="hud-score">0</b></div>
+          <div><small>toppled</small><b id="hud-count">0 / 0</b></div>
+          <div><small id="hud-phase">build</small><b id="hud-combo"></b></div>
+        </div>
+      </div>
+      <div class="hud-bottom">
+        <div id="hud-tools" class="hud-row"></div>
+        <div id="hud-actions" class="hud-row actions"></div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast"></div>
+    <script type="module" src="./src/main.js"></script>
+  </body>
+</html>
