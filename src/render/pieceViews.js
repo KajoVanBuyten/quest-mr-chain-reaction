@@ -63,6 +63,9 @@ class InstancePool {
     this.mesh.instanceColor.setUsage(DynamicDrawUsage);
     this.capacity = capacity;
     this.owners = [];
+    this.dirty = false;
+    // Empty pools are hidden so they cost no draw call (x2 in stereo).
+    this.mesh.visible = false;
     scene.add(this.mesh);
   }
 
@@ -70,7 +73,27 @@ class InstancePool {
     if (this.mesh.count >= this.capacity) return -1;
     const i = this.mesh.count++;
     this.owners[i] = piece;
+    this.mesh.visible = true;
     return i;
+  }
+
+  // Uploads only the used part of the instance buffers.
+  flush() {
+    const n = Math.max(1, this.mesh.count);
+    if (this.dirty) {
+      const m = this.mesh.instanceMatrix;
+      m.clearUpdateRanges();
+      m.addUpdateRange(0, n * 16);
+      m.needsUpdate = true;
+      this.dirty = false;
+    }
+    if (this.colorDirty) {
+      const c = this.mesh.instanceColor;
+      c.clearUpdateRanges();
+      c.addUpdateRange(0, n * 3);
+      c.needsUpdate = true;
+      this.colorDirty = false;
+    }
   }
 
   remove(index) {
@@ -83,11 +106,13 @@ class InstancePool {
       this.mesh.setMatrixAt(index, _m);
       this.mesh.getColorAt(last, _c);
       this.mesh.setColorAt(index, _c);
+      moved.view.still = false;
     }
     this.owners.length = last;
     this.mesh.count = Math.max(0, last);
-    this.mesh.instanceMatrix.needsUpdate = true;
-    this.mesh.instanceColor.needsUpdate = true;
+    this.mesh.visible = this.mesh.count > 0;
+    this.dirty = true;
+    this.colorDirty = true;
   }
 }
 
@@ -286,6 +311,41 @@ export class PieceViews {
     sim.on('remove', (p) => this.remove(p));
   }
 
+  _rampGeometries() {
+    if (this._rampGeo) return this._rampGeo;
+    const { len, w, rise, flat, rail } = DIM.ramp;
+    const phi = rampSlopeAngle();
+    const zf = -len / 2 + flat;
+    const slopeLen = Math.hypot(len / 2 - zf, rise);
+    const bodyParts = [stripForMerge(this.rampWedge)];
+    const railParts = [];
+    const place = (geo, x, y, z, rx = 0) => {
+      if (rx) geo.rotateX(rx);
+      geo.translate(x, y, z);
+      return stripForMerge(geo);
+    };
+    for (const sx of [-1, 1]) {
+      railParts.push(place(new BoxGeometry(0.004, 0.004, flat), sx * (w / 2 + 0.003), rise + rail - 0.002, -len / 2 + flat / 2));
+      railParts.push(
+        place(
+          new BoxGeometry(0.004, 0.004, slopeLen),
+          sx * (w / 2 + 0.003),
+          rise / 2 + Math.cos(phi) * (rail - 0.002),
+          (zf + len / 2) / 2 + Math.sin(phi) * (rail - 0.002),
+          phi,
+        ),
+      );
+      bodyParts.push(place(new BoxGeometry(0.006, rise + rail, flat), sx * (w / 2 + 0.003), (rise + rail) / 2, -len / 2 + flat / 2));
+    }
+    bodyParts.push(place(new BoxGeometry(w + 0.012, rise + rail, 0.006), 0, (rise + rail) / 2, -len / 2 - 0.003));
+    this._rampGeo = {
+      body: mergeGeometries(bodyParts),
+      rails: mergeGeometries(railParts),
+      edges: new EdgesGeometry(this.rampWedge, 25),
+    };
+    return this._rampGeo;
+  }
+
   _buildGhostGeometries() {
     const { w, len } = DIM.seesaw;
     const plank = new BoxGeometry(w, DIM.seesaw.t, len);
@@ -324,44 +384,27 @@ export class PieceViews {
     const pool = this.pools[piece.type];
     if (pool) {
       const index = pool.add(piece);
-      piece.view = { pool, index, flash: 0 };
+      piece.view = { pool, index, flash: 0, still: false };
       if (index < 0) {
         piece.view.pool = null;
         return;
       }
       pool.mesh.setColorAt(index, this.baseColor(piece, _c));
-      pool.mesh.instanceColor.needsUpdate = true;
+      pool.colorDirty = true;
       return;
     }
     const group = new Group();
     let plank = null;
     let pulse = null;
     if (piece.type === 'ramp') {
-      const wedge = new Mesh(this.rampWedge, this.rampMat);
-      wedge.castShadow = true;
-      wedge.receiveShadow = true;
-      group.add(wedge);
-      group.add(new LineSegments(new EdgesGeometry(this.rampWedge, 25), this.edgeMat));
-      const { len, w, rise, flat, rail } = DIM.ramp;
-      const phi = rampSlopeAngle();
-      const zf = -len / 2 + flat;
-      const slopeLen = Math.hypot(len / 2 - zf, rise);
-      for (const sx of [-1, 1]) {
-        const railFlat = new Mesh(new BoxGeometry(0.004, 0.004, flat), this.neonCyan);
-        railFlat.position.set(sx * (w / 2 + 0.003), rise + rail - 0.002, -len / 2 + flat / 2);
-        group.add(railFlat);
-        const railSlope = new Mesh(new BoxGeometry(0.004, 0.004, slopeLen), this.neonCyan);
-        railSlope.rotation.x = phi;
-        railSlope.position.set(sx * (w / 2 + 0.003), rise / 2 + Math.cos(phi) * (rail - 0.002), (zf + len / 2) / 2 + Math.sin(phi) * (rail - 0.002));
-        group.add(railSlope);
-        const wall = new Mesh(new BoxGeometry(0.006, rise + rail, flat), this.rampMat);
-        wall.position.set(sx * (w / 2 + 0.003), (rise + rail) / 2, -len / 2 + flat / 2);
-        group.add(wall);
-      }
-      const back = new Mesh(new BoxGeometry(w + 0.012, rise + rail, 0.006), this.rampMat);
-      back.position.set(0, (rise + rail) / 2, -len / 2 - 0.003);
-      back.castShadow = true;
-      group.add(back);
+      // Pre-merged per material: 3 draw calls per ramp instead of 9.
+      const rg = this._rampGeometries();
+      const body = new Mesh(rg.body, this.rampMat);
+      body.castShadow = true;
+      body.receiveShadow = true;
+      group.add(body);
+      group.add(new Mesh(rg.rails, this.neonCyan));
+      group.add(new LineSegments(rg.edges, this.edgeMat));
     } else if (piece.type === 'bumper') {
       const body = new Mesh(this.bumperBody, this.darkMetal);
       body.castShadow = true;
@@ -393,9 +436,6 @@ export class PieceViews {
     if (v.pool) v.pool.remove(v.index);
     if (v.object) {
       this.scene.remove(v.object);
-      v.object.traverse((o) => {
-        if (o.isLineSegments) o.geometry.dispose();
-      });
     }
     if (v.plank) this.scene.remove(v.plank);
     this.flashing.delete(piece);
@@ -423,6 +463,26 @@ export class PieceViews {
       const v = p.view;
       if (!v) continue;
       const buf = p.interp[0];
+      // Resting instanced pieces keep their matrix: skip them while the pose
+      // equals the one written last time (no interpolation pending).
+      if (v.pool) {
+        const lw = v.lw || (v.lw = new Float32Array(8).fill(NaN));
+        const hidden = p.hidden ? 1 : 0;
+        const settled =
+          !p.held &&
+          buf[0] === buf[7] && buf[1] === buf[8] && buf[2] === buf[9] &&
+          buf[3] === buf[10] && buf[4] === buf[11] && buf[5] === buf[12] && buf[6] === buf[13];
+        if (
+          settled && v.still && lw[7] === hidden &&
+          lw[0] === buf[7] && lw[1] === buf[8] && lw[2] === buf[9] &&
+          lw[3] === buf[10] && lw[4] === buf[11] && lw[5] === buf[12] && lw[6] === buf[13]
+        ) {
+          continue;
+        }
+        v.still = settled;
+        for (let k = 0; k < 7; k++) lw[k] = buf[7 + k];
+        lw[7] = hidden;
+      }
       _p.set(
         buf[0] + (buf[7] - buf[0]) * alpha,
         buf[1] + (buf[8] - buf[1]) * alpha,
@@ -433,6 +493,7 @@ export class PieceViews {
       if (v.pool) {
         _m.compose(_p, _q, p.hidden ? _zero : _s);
         v.pool.mesh.setMatrixAt(v.index, _m);
+        v.pool.dirty = true;
       } else if (v.object) {
         v.object.position.copy(_p);
         v.object.quaternion.copy(_q);
@@ -444,10 +505,6 @@ export class PieceViews {
         }
       }
     }
-    for (const key in this.pools) {
-      const pool = this.pools[key];
-      if (pool.mesh.count > 0) pool.mesh.instanceMatrix.needsUpdate = true;
-    }
 
     if (this.flashing.size) {
       for (const p of this.flashing) {
@@ -456,7 +513,7 @@ export class PieceViews {
         if (v.pool) {
           this.baseColor(p, _c).lerp(_white, v.flash * 0.75).multiplyScalar(1 + v.flash * 1.8);
           v.pool.mesh.setColorAt(v.index, _c);
-          v.pool.mesh.instanceColor.needsUpdate = true;
+          v.pool.colorDirty = true;
         }
         if (v.flash <= 0) this.flashing.delete(p);
       }
@@ -470,6 +527,7 @@ export class PieceViews {
         if (v.pulseT <= 0) this.pulsing.delete(p);
       }
     }
+    for (const key in this.pools) this.pools[key].flush();
     this.triggerMat.emissiveIntensity = 1.3 + Math.sin(this.time * 4) * 0.5;
   }
 
@@ -480,7 +538,7 @@ export class PieceViews {
       if (v && v.pool) {
         v.flash = 0;
         v.pool.mesh.setColorAt(v.index, this.baseColor(p, _c));
-        v.pool.mesh.instanceColor.needsUpdate = true;
+        v.pool.colorDirty = true;
       }
     }
     this.flashing.clear();

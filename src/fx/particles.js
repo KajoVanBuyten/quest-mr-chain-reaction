@@ -138,6 +138,9 @@ export class Particles {
     this.mesh = new Mesh(geo, this.material);
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 20;
+    // Skip the draw call entirely while no particle is alive.
+    this.mesh.visible = false;
+    this.aliveUntil = -1;
     scene.add(this.mesh);
   }
 
@@ -157,6 +160,7 @@ export class Particles {
     v[o + 1] = vy;
     v[o + 2] = vz;
     v[o + 3] = life;
+    if (this.time + life > this.aliveUntil) this.aliveUntil = this.time + life;
     const c = this.aColor.array;
     c[o] = r;
     c[o + 1] = g;
@@ -172,6 +176,7 @@ export class Particles {
   update(time) {
     this.time = time;
     this.material.uniforms.uTime.value = time;
+    this.mesh.visible = time <= this.aliveUntil;
     if (this.pendingCount === 0) return;
     const start = this.pendingStart;
     const count = Math.min(this.pendingCount, this.capacity);
@@ -194,5 +199,6 @@ export class Particles {
     for (let i = 0; i < this.capacity; i++) this.aStart.array[i * 4 + 3] = -1e4;
     this.pendingStart = 0;
     this.pendingCount = this.capacity;
+    this.aliveUntil = -1;
   }
 }

@@ -4,8 +4,12 @@
 import { Quaternion, Vector3 } from 'three';
 import { buildPiecePhysics, DIM, PIECE_INFO, extraBodyPose } from './pieceDefs.js';
 
+// 120 Hz is kept on purpose: the preset levels (seesaw bridge, spiral) are
+// tuned for it and fail at 60/72/90 Hz. The per-frame cost is bounded by
+// MAX_STEPS instead, so a slow frame slows the simulation down a little
+// rather than piling up catch-up steps (no spiral of death).
 export const FIXED_DT = 1 / 120;
-const MAX_STEPS = 5;
+const MAX_STEPS = 2;
 const TOPPLE_COS = Math.cos((32 * Math.PI) / 180);
 const TRIGGER_SPEED = 0.95;
 const EXPLOSION_RADIUS = 0.36;
@@ -42,6 +46,8 @@ export class Simulation {
     this.accumulator = 0;
     this.alpha = 0;
     this.stepCount = 0;
+    this.lastSteps = 0;
+    this.lastAdvanceMs = 0;
     this.phase = 'build';
     this.runStart = 0;
     this.lastActivation = 0;
@@ -315,15 +321,19 @@ export class Simulation {
 
   // ------------------------------------------------------------- stepping
   advance(dt, timeScale) {
-    this.accumulator += Math.min(dt, 0.1) * timeScale;
+    const t0 = performance.now();
+    this.accumulator += Math.min(dt, 0.05) * timeScale;
     let steps = 0;
     while (this.accumulator >= FIXED_DT && steps < MAX_STEPS) {
       this.step();
       this.accumulator -= FIXED_DT;
       steps++;
     }
-    if (steps === MAX_STEPS && this.accumulator > FIXED_DT) this.accumulator = FIXED_DT * 0.5;
+    // Drop time we could not simulate this frame instead of catching up later.
+    if (this.accumulator >= FIXED_DT) this.accumulator = FIXED_DT * 0.999;
     this.alpha = this.accumulator / FIXED_DT;
+    this.lastSteps = steps;
+    this.lastAdvanceMs = performance.now() - t0;
     return steps;
   }
 

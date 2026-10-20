@@ -96,6 +96,7 @@ export class Game {
     this.lineGhost.count = 0;
     this.lineGhost.frustumCulled = false;
     this.lineGhost.renderOrder = 12;
+    this.lineGhost.visible = false;
     scene.add(this.lineGhost);
     this.lineRaw = new Float32Array(MAX_LINE_RAW * 6);
     this.lineRawCount = 0;
@@ -114,6 +115,10 @@ export class Game {
     this.grabs = new Map();
     this.lastHit = { has: false, point: new Vector3(), normal: new Vector3(), valid: false };
     this.rollerSpeeds = new Float32Array(64);
+    this.renderAlpha = 0;
+    // Create all placement ghosts up front so their shaders can be compiled
+    // before the session starts instead of on first use.
+    for (const type of Object.keys(PIECE_INFO)) this._ghostFor(type);
 
     this._wireSimEvents();
   }
@@ -763,6 +768,9 @@ export class Game {
       g.setMatrixAt(i, _m1);
     }
     g.count = this.lineOutCount;
+    g.visible = g.count > 0;
+    g.instanceMatrix.clearUpdateRanges();
+    g.instanceMatrix.addUpdateRange(0, Math.max(1, g.count) * 16);
     g.instanceMatrix.needsUpdate = true;
   }
 
@@ -777,6 +785,7 @@ export class Game {
       this.sim.addPiece('domino', _v2, _q1, { hue: (baseHue + (i / Math.max(1, count)) * 0.35) % 1 });
     }
     this.lineGhost.count = 0;
+    this.lineGhost.visible = false;
     this.lineRawCount = 0;
     this.lineOutCount = 0;
     if (count) {
@@ -791,6 +800,7 @@ export class Game {
   lineCancel() {
     this.lineActive = false;
     this.lineGhost.count = 0;
+    this.lineGhost.visible = false;
     this.lineRawCount = 0;
   }
 
@@ -876,7 +886,8 @@ export class Game {
     this.timeScale += (target - this.timeScale) * Math.min(1, dt * 6);
     if (Math.abs(this.timeScale - target) < 0.002) this.timeScale = target;
     this.sound.pitch = 0.55 + 0.45 * ((this.timeScale - SLOWMO_SCALE) / (1 - SLOWMO_SCALE));
-    this.impactBudget = this.lowCost ? 10 : 18;
+    // Impact sounds/sparks per frame; each one creates WebAudio nodes.
+    this.impactBudget = this.lowCost ? 6 : 14;
 
     let alpha;
     if (this.recorder.playing) {
@@ -890,6 +901,7 @@ export class Game {
       }
     }
 
+    this.renderAlpha = alpha;
     this.fxTime += dt * this.timeScale;
     this.views.update(alpha, dt);
     this.effects.update(this.fxTime, dt * this.timeScale);

@@ -65,10 +65,11 @@ export class Trails {
     );
     this.mesh.frustumCulled = false;
     this.mesh.renderOrder = 15;
+    this.mesh.visible = false;
     scene.add(this.mesh);
     this.slots = [];
     for (let i = 0; i < MAX; i++) {
-      this.slots.push({ piece: null, hist: new Float32Array(SEG * 3), count: 0, energy: 0, r: 1, g: 1, b: 1, width: 0.01 });
+      this.slots.push({ piece: null, hist: new Float32Array(SEG * 3), count: 0, energy: 0, r: 1, g: 1, b: 1, width: 0.01, cleared: false });
     }
   }
 
@@ -101,6 +102,8 @@ export class Trails {
   update(camPos, dt) {
     const pos = this.positions;
     const col = this.colors;
+    let wrote = false;
+    let visible = false;
     for (let si = 0; si < MAX; si++) {
       const s = this.slots[si];
       const base = si * SEG * 2;
@@ -138,6 +141,11 @@ export class Trails {
       } else {
         s.energy = 0;
       }
+      // Idle slots were already collapsed; nothing to rebuild or upload.
+      if (s.energy <= 0.001 && s.cleared) continue;
+      s.cleared = s.energy <= 0.001;
+      if (!s.cleared) visible = true;
+      wrote = true;
       for (let k = 0; k < SEG; k++) {
         const vi = base + k * 2;
         const h = s.hist;
@@ -175,7 +183,10 @@ export class Trails {
         }
       }
     }
-    this.posAttr.needsUpdate = true;
-    this.colAttr.needsUpdate = true;
+    this.mesh.visible = visible;
+    if (wrote) {
+      this.posAttr.needsUpdate = true;
+      this.colAttr.needsUpdate = true;
+    }
   }
 }

@@ -187,7 +187,9 @@ export class XRInput {
     if (slot.model) slot.model.visible = !slot.isHand;
     slot.laser.visible = slot.handedness !== 'left' || !slot.isHand;
     slot.buttons.fill(false);
-    this._requestHitTest(slot);
+    // Only the primary (right) pointer places pieces; a hit-test source for
+    // the left hand would cost the runtime work every frame for nothing.
+    if (slot.handedness !== 'left') this._requestHitTest(slot);
   }
 
   _disconnected(slot) {

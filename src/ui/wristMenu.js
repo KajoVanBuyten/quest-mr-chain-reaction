@@ -1,7 +1,7 @@
 // Tool palette rendered into a canvas texture and shown next to the left hand
 // or controller in XR.
 
-import { CanvasTexture, Group, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, Vector3 } from 'three';
+import { CanvasTexture, Group, LinearFilter, Mesh, MeshBasicMaterial, PlaneGeometry, SRGBColorSpace, Vector3 } from 'three';
 import { drawIcon } from './icons.js';
 import { ALL_ITEMS } from './items.js';
 
@@ -22,6 +22,9 @@ export class WristMenu {
     this.texture = new CanvasTexture(this.canvas);
     this.texture.colorSpace = SRGBColorSpace;
     this.texture.anisotropy = 4;
+    // No mipmap chain to rebuild on every redraw (512x648 texture).
+    this.texture.generateMipmaps = false;
+    this.texture.minFilter = LinearFilter;
     this.mesh = new Mesh(
       new PlaneGeometry(PANEL_W, PANEL_H),
       new MeshBasicMaterial({ map: this.texture, transparent: true, toneMapped: false, depthWrite: false }),
@@ -35,6 +38,7 @@ export class WristMenu {
     this.pressT = 0;
     this.state = null;
     this.stateKey = '';
+    this.sinceDraw = 1;
     this.items = ALL_ITEMS;
   }
 
@@ -44,6 +48,10 @@ export class WristMenu {
       this.pressT = Math.max(0, this.pressT - dt * 4);
       if (this.pressT === 0) this.pressFlash = -1;
     }
+    this.sinceDraw += dt;
+    // Redraw + texture upload only while visible and at most ~15 times/s
+    // (the score changes many times per second during a run).
+    if (!this.group.visible || this.sinceDraw < 0.066) return;
     const key = [
       state.tool,
       state.slowmo,
@@ -62,6 +70,7 @@ export class WristMenu {
     if (key === this.stateKey) return;
     this.stateKey = key;
     this.state = state;
+    this.sinceDraw = 0;
     this.redraw();
   }
 

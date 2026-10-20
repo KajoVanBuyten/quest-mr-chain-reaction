@@ -79,11 +79,23 @@ export class Effects {
     scene.add(this.fireball);
     this.fireT = 1;
 
-    // One persistent light so the shader permutation never changes.
+    // One persistent light so the shader permutation never changes while
+    // playing. In XR it is switched off (every PBR fragment would pay for it)
+    // and the flash is faked with additive glow sprites instead.
     this.flash = new PointLight(0xff9a40, 0, 2.5, 2);
     this.flash.castShadow = false;
     scene.add(this.flash);
     this.flashLevel = 0;
+    this.lightFlash = true;
+  }
+
+  setLightFlash(enabled) {
+    this.lightFlash = enabled;
+    this.flash.visible = enabled;
+    if (!enabled) {
+      this.flashLevel = 0;
+      this.flash.intensity = 0;
+    }
   }
 
   sparks(x, y, z, count, r = 1, g = 0.85, b = 0.45, speed = 1.2, size = 0.006) {
@@ -153,8 +165,13 @@ export class Effects {
     this.fireball.position.set(x, y, z);
     this.fireball.visible = true;
     this.fireT = 0;
-    this.flash.position.set(x, y + 0.08, z);
-    this.flashLevel = 1;
+    if (this.lightFlash) {
+      this.flash.position.set(x, y + 0.08, z);
+      this.flashLevel = 1;
+    } else {
+      this.glow(x, y + 0.04, z, 1, 0.62, 0.25, 0.42, 0.28);
+      this.glow(x, y + 0.04, z, 1, 0.9, 0.6, 0.18, 0.18);
+    }
   }
 
   shockwave(x, y, z, size, dur, r = 1, g = 0.55, b = 0.2) {

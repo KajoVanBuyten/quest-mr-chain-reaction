@@ -1,5 +1,10 @@
 // Application shell: renderer, scene, lighting, desktop preview and the WebXR
 // session lifecycle (immersive-ar with graceful VR / desktop fallbacks).
+//
+// XR render budget (Quest 3, 72 Hz, two eyes, no multiview in WebGLRenderer):
+// no realtime shadow map (instanced blob shadows instead), no dynamic point
+// lights, no shadow-catcher overdraw, depth-sensing occlusion only on request,
+// and shaders are compiled up front so effects never hitch on first use.
 
 import {
   ACESFilmicToneMapping,
@@ -43,12 +48,16 @@ import { WristMenu } from './ui/wristMenu.js';
 import { XRInput } from './input/xrInput.js';
 import { DesktopInput } from './input/desktopInput.js';
 import { Hud } from './ui/hud.js';
+import { BlobShadows } from './fx/blobShadows.js';
+import { PerfHud } from './ui/perfHud.js';
 
 const DESKTOP_BG = new Color(0x0a0d17);
 
 const AR_OPTIONAL = ['hit-test', 'plane-detection', 'mesh-detection', 'anchors', 'hand-tracking', 'depth-sensing'];
+// Only the GPU path is used by three.js; a CPU-optimized session would read
+// the depth buffer back every frame without any benefit.
 const DEPTH_INIT = {
-  usagePreference: ['cpu-optimized', 'gpu-optimized'],
+  usagePreference: ['gpu-optimized'],
   dataFormatPreference: ['luminance-alpha', 'float32'],
 };
 
@@ -88,7 +97,8 @@ const _v1 = new Vector3();
 const _v2 = new Vector3();
 
 export class App {
-  constructor({ container, hudRoot, RAPIER, onSessionEnd, onInfo }) {
+  constructor({ container, hudRoot, RAPIER, onSessionEnd, onInfo, options = {} }) {
+    this.options = { stats: false, targetFps: 72, framebufferScale: 1, ...options };
     this.container = container;
     this.onSessionEnd = onSessionEnd || (() => {});
     this.onInfo = onInfo || (() => {});
@@ -107,6 +117,7 @@ export class App {
     renderer.xr.enabled = true;
     renderer.xr.setReferenceSpaceType('local-floor');
     renderer.xr.setFoveation(1);
+    renderer.info.autoReset = false;
     container.appendChild(renderer.domElement);
     this.renderer = renderer;
 
@@ -145,6 +156,7 @@ export class App {
     this.trails = new Trails(scene);
     this.text = new FloatingText(scene);
     this.sound = new SoundEngine();
+    this.blobs = new BlobShadows(scene, this.sim);
     this.game = new Game({
       sim: this.sim,
       scene,
@@ -174,6 +186,9 @@ export class App {
     scene.add(this.anchorMarker);
     this.anchor = null;
     this.pendingAnchor = null;
+    this.depthActive = false;
+
+    this.perf = this.options.stats ? new PerfHud(camera) : null;
 
     this._setupComposer();
     window.addEventListener('resize', () => this._resize());
@@ -246,14 +261,15 @@ export class App {
   }
 
   // ------------------------------------------------------------------- XR
-  async enterXR(mode) {
+  async enterXR(mode, { depthOcclusion = false } = {}) {
     if (!navigator.xr) throw new Error('WebXR is not available in this browser.');
     this.sound.init();
     const isAR = mode === 'immersive-ar';
+    const noDepth = AR_OPTIONAL.filter((f) => f !== 'depth-sensing');
     const attempts = isAR
       ? [
-          { requiredFeatures: ['local-floor'], optionalFeatures: AR_OPTIONAL, depthSensing: DEPTH_INIT },
-          { requiredFeatures: ['local-floor'], optionalFeatures: AR_OPTIONAL.filter((f) => f !== 'depth-sensing') },
+          ...(depthOcclusion ? [{ requiredFeatures: ['local-floor'], optionalFeatures: AR_OPTIONAL, depthSensing: DEPTH_INIT }] : []),
+          { requiredFeatures: ['local-floor'], optionalFeatures: noDepth },
           { requiredFeatures: ['local-floor'], optionalFeatures: ['hit-test', 'hand-tracking'] },
           { requiredFeatures: ['local-floor'] },
         ]
@@ -270,11 +286,51 @@ export class App {
     }
     if (!session) throw lastErr || new Error('Could not start the XR session.');
 
-    this.renderer.xr.setFramebufferScaleFactor(isAR ? 1.0 : 1.0);
+    this.renderer.xr.setFramebufferScaleFactor(this.options.framebufferScale);
     session.addEventListener('end', () => this._onSessionEnd());
     await this.renderer.xr.setSession(session);
     this._onSessionStart(session, isAR ? 'ar' : 'vr');
+    this._setFrameRate(session);
     return session;
+  }
+
+  _setFrameRate(session) {
+    const want = this.options.targetFps;
+    const rates = session.supportedFrameRates;
+    if (!want || !rates || typeof session.updateTargetFrameRate !== 'function') return;
+    let best = null;
+    for (const r of rates) if (Math.abs(r - want) < 1) best = r;
+    if (best) session.updateTargetFrameRate(best).catch(() => {});
+  }
+
+  // Lighting/shadow setup for headset rendering (both AR and VR fallback).
+  _applyXRLook(xr) {
+    this.renderer.shadowMap.enabled = !xr;
+    this.sun.castShadow = !xr;
+    this.effects.setLightFlash(!xr);
+    this.effects.lowCost = xr;
+    this.game.lowCost = xr;
+    this.blobs.setEnabled(xr);
+    if (this.perf) this.perf.setXR(xr);
+  }
+
+  // Compiles every material in the scene (including hidden effects, ghosts and
+  // menu) in the background so nothing compiles mid-game.
+  _prewarm() {
+    const hidden = [];
+    this.scene.traverse((o) => {
+      if (!o.visible && !o.isLight) {
+        hidden.push(o);
+        o.visible = true;
+      }
+    });
+    try {
+      const p = this.renderer.compileAsync(this.scene, this.camera);
+      if (p && p.catch) p.catch(() => {});
+    } catch {
+      /* compileAsync unavailable */
+    }
+    for (const o of hidden) o.visible = false;
   }
 
   _onSessionStart(session, mode) {
@@ -292,6 +348,8 @@ export class App {
       hands: has('hand-tracking'),
       depth: features ? features.includes('depth-sensing') : false,
     };
+    this.depthActive = this.features.depth;
+    this._applyXRLook(true);
 
     if (mode === 'ar') {
       this.scene.background = null;
@@ -305,11 +363,13 @@ export class App {
       this.accentB.visible = false;
       this.hemi.intensity = 1.0;
       this.sun.intensity = 1.8;
-      this._setShadowSize(1024);
       this.game.clear();
       this.game.levelIndex = -1;
-      this.xrRoom.start(this.camera.position, { planes: this.features.planes, meshes: this.features.meshes });
-      this.xrRoom.setOcclusionMeshes(!this.features.depth);
+      this.xrRoom.start(this.camera.position, {
+        planes: this.features.planes,
+        meshes: this.features.meshes,
+        occlusion: !this.depthActive,
+      });
       this.autoLevelAt = this.time + 2.5;
       this.autoLevelDeadline = this.time + 5;
     } else {
@@ -318,10 +378,9 @@ export class App {
       if (base && typeof XRRigidTransform !== 'undefined') {
         this.renderer.xr.setReferenceSpace(base.getOffsetReferenceSpace(new XRRigidTransform({ x: 0, y: 0, z: -1.15 })));
       }
-      this._setShadowSize(1024);
     }
 
-    this.renderer.setPixelRatio(1);
+    this._prewarm();
     this.xrInput.start(session, this.renderer.xr.getReferenceSpace());
     this.welcomeAt = this.time + 0.8;
     this.anchor = null;
@@ -339,12 +398,12 @@ export class App {
     this.scene.background = DESKTOP_BG;
     this.scene.fog = new Fog(DESKTOP_BG, 7, 16);
     this.renderer.setClearColor(0x000000, 1);
-    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.accentA.visible = true;
     this.accentB.visible = true;
     this.hemi.intensity = 0.75;
     this.sun.intensity = 2.4;
-    this._setShadowSize(2048);
+    this.depthActive = false;
+    this._applyXRLook(false);
     this.sun.position.set(1.4, 3.4, 1.2);
     this.sun.target.position.set(0, 0.74, -0.3);
     if (wasAR) {
@@ -357,18 +416,10 @@ export class App {
     this.onSessionEnd();
   }
 
-  _setShadowSize(size) {
-    const s = this.sun.shadow;
-    if (s.mapSize.x === size) return;
-    s.mapSize.set(size, size);
-    if (s.map) {
-      s.map.dispose();
-      s.map = null;
-    }
-  }
-
   // ------------------------------------------------------------- per frame
   _loop(t, frame) {
+    const loopStart = performance.now();
+    this.renderer.info.reset();
     this.timer.update(t);
     const dt = Math.min(0.05, this.timer.getDelta());
     this.time += dt;
@@ -383,7 +434,7 @@ export class App {
         this._updateAnchor(frame, refSpace);
       }
       this.xrInput.update(frame, refSpace, dt, this.time, this.camera);
-      this._patchDepthOcclusion();
+      if (this.depthActive) this._patchDepthOcclusion();
       if (this.welcomeAt && this.time > this.welcomeAt) {
         this.welcomeAt = 0;
         _v1.set(0, 0, -0.9).applyQuaternion(this.camera.quaternion).add(this.camera.position);
@@ -401,13 +452,22 @@ export class App {
     this.game.viewerPosition.copy(this.camera.position);
     this.game.viewerForward = this.camera.getWorldDirection(_v2);
     this.game.update(dt, this.camera);
+    this.blobs.update(this.game.renderAlpha);
     if (presenting) this.menu.update(this.game.state, dt);
     else this.hud.update();
     this.sound.setListener(this.camera.matrixWorld);
-    if (presenting && this.mode === 'ar') this._followShadows();
 
+    const renderStart = performance.now();
     if (presenting) this.renderer.render(this.scene, this.camera);
     else this.composer.render(dt);
+    if (this.perf) {
+      const end = performance.now();
+      this.perf.record(t, renderStart - loopStart, this.sim.lastAdvanceMs, end - renderStart, this.renderer.info.render, {
+        steps: this.sim.lastSteps,
+        pieces: this.sim.pieces.length,
+        note: this.mode === 'ar' ? `room ${this.xrRoom.planes.size}p/${this.xrRoom.meshes.size}m${this.depthActive ? ' depth' : ''}` : '',
+      });
+    }
   }
 
   _autoLevel() {
@@ -452,21 +512,6 @@ export class App {
       } else {
         this.anchorMarker.visible = false;
       }
-    }
-  }
-
-  _followShadows() {
-    if ((this.shadowTick = (this.shadowTick || 0) + 1) % 30 !== 0) return;
-    const c = this.game._layoutCenter(_v1);
-    this.sun.target.position.copy(c);
-    this.sun.position.set(c.x + 0.7, c.y + 2.6, c.z + 0.5);
-    const sc = this.sun.shadow.camera;
-    if (sc.right !== 1.1) {
-      sc.left = -1.1;
-      sc.right = 1.1;
-      sc.top = 1.1;
-      sc.bottom = -1.1;
-      sc.updateProjectionMatrix();
     }
   }
 

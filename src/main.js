@@ -8,6 +8,33 @@ const btnDesktop = $('btn-desktop');
 const arSub = $('ar-sub');
 const statusEl = $('status');
 const toastEl = $('toast');
+const optDepth = $('opt-depth');
+
+// URL options: ?stats (perf overlay), ?fps=90 (target refresh rate),
+// ?scale=0.9 (XR framebuffer scale), ?depth (preselect depth occlusion).
+const params = new URLSearchParams(location.search);
+const numParam = (name, min, max, fallback) => {
+  const v = parseFloat(params.get(name));
+  return Number.isFinite(v) && v >= min && v <= max ? v : fallback;
+};
+const OPTIONS = {
+  stats: params.has('stats'),
+  targetFps: numParam('fps', 60, 120, 72),
+  framebufferScale: numParam('scale', 0.5, 1.5, 1),
+};
+
+try {
+  optDepth.checked = params.has('depth') || localStorage.getItem('cr-depth-occlusion') === '1';
+} catch {
+  optDepth.checked = params.has('depth');
+}
+optDepth.addEventListener('change', () => {
+  try {
+    localStorage.setItem('cr-depth-occlusion', optDepth.checked ? '1' : '0');
+  } catch {
+    /* storage unavailable */
+  }
+});
 
 let app = null;
 let arSupported = false;
@@ -65,7 +92,7 @@ function updateButtons() {
 async function enter(mode) {
   if (!app) return;
   try {
-    const session = app.enterXR(mode);
+    const session = app.enterXR(mode, { depthOcclusion: optDepth.checked });
     showLanding(false);
     await session;
   } catch (err) {
@@ -95,6 +122,7 @@ async function boot() {
         setStatus('Session ended — ready when you are.');
       },
       onInfo: (text) => toast(`Room: ${text}`),
+      options: OPTIONS,
     });
     setStatus('Ready. Put on your Quest 3 and press Enter AR — or preview right here.');
   } catch (err) {

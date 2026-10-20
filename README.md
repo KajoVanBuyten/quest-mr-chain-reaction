@@ -9,16 +9,16 @@ Leuchtende Trigger-Kugel platzieren, Start drücken und die Kettenreaktion in Bu
 
 ## Features
 
-- **Dein Raum ist das Level** – erkannte Ebenen (`plane-detection`) werden zu Rapier-Quadern, das Raum-Mesh (`mesh-detection`) zu Trimesh-Collidern. Ohne Raumdaten gibt es einen Boden bei y = 0 als Fallback.
+- **Dein Raum ist das Level** – erkannte Ebenen (`plane-detection`) werden zu Rapier-Quadern, das Raum-Mesh (`mesh-detection`) zu vereinfachten Trimesh-Collidern (Teile, die schon eine Ebene abdeckt, werden weggelassen). Ohne Raumdaten gibt es einen Boden bei y = 0 als Fallback.
 - **Platzieren per Hit-Test** auf echte Oberflächen, mit leuchtender Geister-Vorschau, die an der Oberflächennormalen ausgerichtet ist. Drehen per Thumbstick oder Handgelenk-Drehung.
 - **Domino-Linie**: Über den Tisch ziehen, und eine geschwungene Reihe Dominosteine wird automatisch gelegt.
 - **Greifen & Werfen** mit Händen (Pinch) und Controllern (Grip, nah oder per Strahl).
 - **Bauteile**: Domino, Murmel (mit Leuchtspur), Rampe, Bowling-Pin, Bumper, Wippe, explosives Fass, Trigger-Kugel, Radierer.
 - **Start, Reset, Bullet Time** (weiche Zeitlupe inkl. tieferem Sound) und **Replay** des letzten Laufs (inkl. Effekten und Sounds).
-- **Effekte**: GPU-instanzierte Partikel (Funken, Staub, Konfetti), Explosion mit Schockwelle und Lichtblitz, Leuchtspuren der Murmeln, holografischer Scan-Sweep über das Raum-Mesh beim Sessionstart.
-- **Schatten auf echten Oberflächen**: Shadow-Catcher (`ShadowMaterial`) auf den erkannten Ebenen, damit virtuelle Objekte realistische Schatten auf Tisch und Boden werfen.
-- **Okklusion**: Mit `depth-sensing` (GPU) verdecken echte Gegenstände virtuelle Teile (mit kleinem Tiefen-Bias gegen Flackern); ohne Depth Sensing dient das Raum-Mesh als Okkluder.
-- **Prozeduraler 3D-Sound** (WebAudio, HRTF-Panner): Domino-Klicks mit Tonhöhenvariation, Rollgeräusche, Booms, Bumper-„Boing", Combo-Töne, Fanfare – komplett synthetisiert, keine Audiodateien.
+- **Effekte**: GPU-instanzierte Partikel (Funken, Staub, Konfetti), Explosion mit Schockwelle und Glow-Blitz, Leuchtspuren der Murmeln, holografischer Scan-Sweep über das Raum-Mesh beim Sessionstart.
+- **Schatten auf echten Oberflächen**: In XR weiche Kontaktschatten (instanzierte Blob-Schatten, per Raycast auf Tisch, Boden oder Rampe projiziert); in der Desktop-Vorschau echte Schattenkarte.
+- **Okklusion**: Standardmäßig verdeckt das Raum-Mesh (unsichtbar, nur Tiefe) virtuelle Teile. Optional (Häkchen *Depth occlusion* auf der Startseite) verdecken echte Gegenstände per `depth-sensing` (GPU) – sieht besser aus, kostet aber Bildrate.
+- **Prozeduraler 3D-Sound** (WebAudio, räumliche Panner, HRTF für große Ereignisse): Domino-Klicks mit Tonhöhenvariation, Rollgeräusche, Booms, Bumper-„Boing", Combo-Töne, Fanfare – komplett synthetisiert, keine Audiodateien.
 - **Punkte & Combos**: umgefallene Teile zählen, schwebender Combo-Zähler, „Perfect Run" mit Konfetti.
 - **Vier Preset-Level**, die automatisch auf der größten erkannten Tischfläche (oder auf dem Boden vor dir) platziert werden.
 - **Desktop-Vorschau**: Ohne Headset gibt es ein stilisiertes virtuelles Wohnzimmer mit OrbitControls, Maussteuerung und Bloom.
@@ -92,8 +92,33 @@ Das Deployment auf GitHub Pages erfolgt automatisch über `.github/workflows/dep
 - **Rapier** (`@dimforge/rapier3d-compat`) für die Physik – fester Zeitschritt (120 Hz) mit Interpolation, Zeitskalierung für Bullet Time
 - **Vite** als Build-Tool, `base: './'` für GitHub Pages
 - **WebXR-Features**: `local-floor` (benötigt), optional `hit-test`, `plane-detection`, `mesh-detection`, `anchors`, `hand-tracking`, `depth-sensing` – jedes Feature degradiert sauber, wenn es fehlt
-- **Performance**: Instancing für alle kleinen Teile, ein Draw-Call für Partikel und Spuren, nur ein dynamisches Licht für Explosionen, `setFoveation(1)`, Bloom nur im Desktop-Modus
+- **Performance**: siehe Abschnitt *Performance*
 - Alle Geometrien, Texturen und Sounds werden prozedural erzeugt – keine externen Assets zur Laufzeit
+
+## Performance
+
+Ziel sind stabile 72 fps (optional 90 fps) auf der Quest 3 im Passthrough-AR, auch mit Raum-Mesh und vollem Level.
+
+- **Keine Echtzeit-Schattenkarte in XR**: stattdessen ein einziger instanzierter Draw-Call mit weichen Blob-Schatten. Keine `ShadowMaterial`-Flächen mehr über Boden und Tisch (sparte großflächige transparente Überzeichnung pro Auge).
+- **Keine dynamischen Punktlichter in XR**: der Explosionsblitz ist ein additiver Glow-Sprite statt eines `PointLight`; Neon-Akzente über emissive Materialien. Bloom nur in der Desktop-Vorschau.
+- **Depth Sensing nur auf Wunsch** und nur `gpu-optimized` (vorher wurde `cpu-optimized` bevorzugt, was den Tiefenpuffer jeden Frame auf die CPU kopiert, ohne dass three.js ihn nutzt).
+- **Raum-Mesh**: wird nur neu verarbeitet, wenn sich der Inhalt wirklich ändert (Fingerprint statt `lastChangedTime`), entprellt und auf mehrere Frames verteilt (max. ~2 ms pro Frame). Collider werden per Vertex-Clustering vereinfacht, in Stücke von 3000 Dreiecken geteilt und Dreiecke auf erkannten Ebenen weggelassen. Alle Okkluder sind ein einziger Draw-Call. Der Scan-Sweep existiert nur während des Intros.
+- **Physik**: fester 120-Hz-Schritt mit Interpolation (die Preset-Level sind darauf abgestimmt), aber höchstens 2 Teilschritte pro Frame – ein langsamer Frame verlangsamt die Simulation kurz, statt Nachholschritte aufzutürmen.
+- **Weniger Draw-Calls** (ohne Multiview zählt jeder doppelt): leere Instanz-Pools, Partikel, Spuren und Linien-Vorschau werden nicht gezeichnet; Rampen sind pro Material zusammengefasst; ruhende Teile werden nicht neu hochgeladen.
+- **Shader werden beim Sessionstart vorab kompiliert** (`compileAsync`), damit die erste Explosion nicht ruckelt.
+- **UI & Audio**: Wrist-Menü nur sichtbar und max. ~15×/s neu gezeichnet (ohne Mipmaps), schwebende Texte werden wiederverwendet; Klick-/Rollgeräusche mit günstigen Equal-Power-Pannern, HRTF nur für große Ereignisse, Stimmenlimit und Impact-Budget pro Frame. Hit-Test nur für die rechte Hand.
+
+### Optionen
+
+| Option | Wirkung |
+| --- | --- |
+| Häkchen **Depth occlusion** (Startseite) | Okklusion über den Tiefensensor der Quest statt über das Raum-Mesh. Standard: aus. Wird im Browser gespeichert. |
+| `?stats` | Performance-Anzeige: fps, Frame-Zeit, CPU-/Render-Zeit, Physik-Zeit, Draw-Calls, Dreiecke. In XR als kleines Panel unten im Blickfeld. |
+| `?fps=90` | Ziel-Bildrate der XR-Session (Standard 72, sofern vom Gerät unterstützt). |
+| `?scale=0.9` | Framebuffer-Skalierung in XR (Standard 1.0). |
+| `?depth` | Häkchen *Depth occlusion* vorab setzen. |
+
+Beispiel: `https://kajovanbuyten.github.io/quest-mr-chain-reaction/?stats&fps=90`
 
 ## Projektstruktur
 

@@ -1,9 +1,12 @@
-// Procedural spatial audio. Every sound is synthesised with WebAudio nodes
-// and positioned with HRTF panners; no audio files are used.
+// Procedural spatial audio. Every sound is synthesised with WebAudio nodes;
+// no audio files are used. The frequent, short sounds (clicks, rolling) use
+// cheap equal-power panners, HRTF is reserved for the few big events, and the
+// number of concurrent voices is capped to keep the audio thread light.
 
 import { Vector3 } from 'three';
 
-const MAX_VOICES = 36;
+const MAX_VOICES = 24;
+const MIN_CLICK_GAP = 0.012;
 const _pos = new Vector3();
 const _fwd = new Vector3();
 const _up = new Vector3();
@@ -16,7 +19,7 @@ function setParam(param, value, ctx) {
 export class SoundEngine {
   constructor() {
     this.ctx = null;
-    this.voices = 0;
+    this.voiceEnds = [];
     this.pitch = 1;
     this.lastClick = 0;
     this.muted = false;
@@ -83,10 +86,10 @@ export class SoundEngine {
     return buf;
   }
 
-  _panner(x, y, z, ref = 0.35) {
+  _panner(x, y, z, ref = 0.35, hrtf = false) {
     const ctx = this.ctx;
     const p = ctx.createPanner();
-    p.panningModel = 'HRTF';
+    p.panningModel = hrtf ? 'HRTF' : 'equalpower';
     p.distanceModel = 'inverse';
     p.refDistance = ref;
     p.maxDistance = 30;
@@ -103,11 +106,14 @@ export class SoundEngine {
   }
 
   _voice(duration) {
-    if (!this.ctx || this.muted || this.voices >= MAX_VOICES) return false;
-    this.voices++;
-    setTimeout(() => {
-      this.voices--;
-    }, (duration + 0.1) * 1000);
+    if (!this.ctx || this.muted) return false;
+    const now = this.ctx.currentTime;
+    const ends = this.voiceEnds;
+    let n = 0;
+    for (let i = 0; i < ends.length; i++) if (ends[i] > now) ends[n++] = ends[i];
+    ends.length = n;
+    if (n >= MAX_VOICES) return false;
+    ends.push(now + duration + 0.05);
     return true;
   }
 
@@ -139,7 +145,7 @@ export class SoundEngine {
     if (!this.ctx) return;
     const ctx = this.ctx;
     const now = ctx.currentTime;
-    if (now - this.lastClick < 0.004) return;
+    if (now - this.lastClick < MIN_CLICK_GAP) return;
     this.lastClick = now;
     const vol = Math.min(1, 0.15 + intensity * 1.2);
     const dur = 0.09 / this.pitch;
@@ -200,7 +206,7 @@ export class SoundEngine {
     const p = this.pitch;
     const dur = 1.6 / p;
     if (!this._voice(dur)) return;
-    const out = this._panner(x, y, z, 1.2);
+    const out = this._panner(x, y, z, 1.2, true);
 
     const n = ctx.createBufferSource();
     n.buffer = this.noise;
@@ -234,7 +240,7 @@ export class SoundEngine {
     o.stop(now + dur);
 
     // Crackle tail
-    for (let i = 0; i < 6; i++) {
+    for (let i = 0; i < 4; i++) {
       const t = now + (0.08 + Math.random() * 0.5) / p;
       this._crackle(out, t);
     }
@@ -263,7 +269,7 @@ export class SoundEngine {
     const p = this.pitch;
     const dur = 0.45 / p;
     if (!this._voice(dur)) return;
-    const out = this._panner(x, y, z);
+    const out = this._panner(x, y, z, 0.35, true);
     const o = ctx.createOscillator();
     o.type = 'triangle';
     o.frequency.setValueAtTime(180 * p, now);
@@ -292,7 +298,7 @@ export class SoundEngine {
     const now = ctx.currentTime;
     const dur = 0.6;
     if (!this._voice(dur)) return;
-    const out = this._panner(x, y, z);
+    const out = this._panner(x, y, z, 0.35, true);
     const n = ctx.createBufferSource();
     n.buffer = this.noise;
     const bp = ctx.createBiquadFilter();
